@@ -3,7 +3,52 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>三年级英语 · 对话跟读检测</title>
+<title>三年级英语 · AI 对话跟读检测</title>
+<!-- 引入 Transformers.js 用于本地运行 AI 模型 -->
+<script type="module">
+  import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
+  
+  // 解决国内下载模型慢的问题（使用国内镜像站）
+  env.allowLocalModels = false;
+  env.remoteHost = 'https://hf-mirror.com'; 
+
+  let transcriber = null;
+  let modelLoading = false;
+
+  // 暴露给全局使用的 AI 初始化函数
+  window.loadAIModel = async function(updateStatus) {
+    if (transcriber) return true;
+    if (modelLoading) return false;
+    modelLoading = true;
+    updateStatus('正在准备 AI 模型，首次使用需下载约 40MB 数据，请稍候...');
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en');
+      modelLoading = false;
+      return true;
+    } catch (error) {
+      console.error('模型加载失败', error);
+      modelLoading = false;
+      updateStatus('AI 模型加载失败，请检查网络后刷新重试。');
+      return false;
+    }
+  };
+
+  // 暴露给全局使用的 AI 识别函数
+  window.recognizeAudio = async function(audioFloat32Array) {
+    if (!transcriber) return '';
+    try {
+      const output = await transcriber(audioFloat32Array, {
+        language: 'english',
+        task: 'transcribe'
+      });
+      return output.text || '';
+    } catch (e) {
+      console.error('识别出错', e);
+      return '';
+    }
+  };
+</script>
+
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
@@ -24,7 +69,8 @@
   .hint{margin:14px 0 0;font-size:12.5px;color:#64748b;line-height:1.85;background:#f8fafc;border-radius:10px;padding:10px 12px;border-left:3px solid #93c5fd;}
   .btn{border:none;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:700;cursor:pointer;transition:.16s;}
   .btn:active{transform:scale(.985);}
-  .btn.primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;}
+  .btn:disabled{opacity:.6;cursor:not-allowed;}
+  .btn.primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.3);}
   .btn.ghost{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;}
   .btn.danger{background:#fef2f2;color:#dc2626;border:1px solid #fecaca;}
   .btn.success{background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;}
@@ -35,8 +81,7 @@
   .actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
   .actions .btn{flex:1;min-width:110px;}
   .scene-row{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;margin-bottom:14px;}
-  .scene-box{flex:0 0 34%;min-width:150px;border-radius:14px;background:#eff6ff;border:1.5px solid #bfdbfe;display:flex;align-items:center;justify-content:center;padding:10px;}
-  .scene-box svg{width:100%;height:auto;max-height:160px;}
+  .scene-box{flex:0 0 34%;min-width:150px;border-radius:14px;background:#eff6ff;border:1.5px solid #bfdbfe;display:flex;align-items:center;justify-content:center;padding:10px;font-size:40px;}
   .prompt-box{flex:1;min-width:200px;}
   .q-index{display:inline-block;background:#2563eb;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;margin-bottom:8px;}
   .q-text{font-size:22px;font-weight:800;color:#1e3a8a;}
@@ -44,10 +89,7 @@
   .voice-bar{display:flex;gap:10px;flex-wrap:wrap;}
   .voice-bar .btn{flex:1;min-width:120px;}
   .rec-area{margin-top:12px;padding:12px;border-radius:12px;background:#f8fafc;border:1px dashed #cbd5e1;}
-  #playbackBar{margin-top:10px;display:none;}
-  #playbackBar audio{width:100%;height:40px;}
-  #manualBar{margin-top:12px;padding:12px;border-radius:12px;background:#fef9c3;border:1px solid #fde68a;display:none;}
-  #manualBar .mbtns{display:flex;gap:10px;margin-top:8px;}
+  .ai-status{margin-top:10px;font-size:14px;color:#1d4ed8;font-weight:700;display:none;}
   .result-head{display:flex;align-items:center;justify-content:center;gap:26px;padding:8px 0;}
   .result-meta{font-size:14px;line-height:2.1;}
   .result-meta b{color:#1d4ed8;font-size:17px;}
@@ -55,14 +97,19 @@
   .detail table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px;}
   .detail th,.detail td{border:1px solid #e2e8f0;padding:6px;text-align:center;}
   .detail th{background:#f1f5f9;}
+  .teacher p{margin:0 0 12px;font-size:13px;color:#64748b;}
+  #qResultBox{margin-top:14px;padding:14px;border-radius:12px;display:none;}
+  #qResultBox.ok{background:#dcfce7;border:1px solid #86efac;}
+  #qResultBox.bad{background:#fee2e2;border:1px solid #fca5a5;}
+  #qResultBox.wait{background:#fef3c7;border:1px solid #fde68a;}
 </style>
 </head>
 <body>
 <div id="toast"></div>
 <div class="app">
   <header class="hero">
-    <h1>三年级英语 · 对话跟读检测</h1>
-    <p>听音跟读 · 录音回放 · 家长判定</p>
+    <h1>三年级英语 · AI 自动检测</h1>
+    <p>本地 AI 识别 · 无需家长判定</p>
   </header>
 
   <section class="card" id="setupPanel">
@@ -70,7 +117,9 @@
     <div class="field"><label>班级</label><input id="inClass" type="text" placeholder="例如：三年级(2)班"></div>
     <div class="field"><label>姓名</label><input id="inName" type="text" placeholder="请输入孩子的姓名"></div>
     <button class="btn primary" id="btnStart">开始检测</button>
-    <p class="hint">说明：点击“听发音”让孩子听，然后点击“录音”跟读。读完停止录音，家长点击回放听一听，最后由家长判定对错。共 9 题。</p>
+    <p class="hint" style="color:#b45309;background:#fffbeb;border-left-color:#f59e0b;">
+      <b>⚠️ 请耐心等待：</b> 点击开始后，系统会下载 AI 模型（约40MB）。首次使用可能需要等十几秒，加载完成后即可极速自动识别。
+    </p>
   </section>
 
   <section class="card" id="quizPanel" hidden>
@@ -80,7 +129,7 @@
     </div>
 
     <div class="scene-row">
-      <div class="scene-box" id="sceneBox"></div>
+      <div class="scene-box" id="sceneBox">🏫</div>
       <div class="prompt-box">
         <span class="q-index" id="qIndex"></span>
         <div class="q-text" id="qText"></div>
@@ -95,20 +144,10 @@
 
     <div class="rec-area">
       <div id="recStatus" style="font-size:13px;color:#64748b;">点击“按下录音”，让孩子大声跟读。</div>
-      <div id="playbackBar"><audio id="audioPlayback" controls></audio></div>
+      <div class="ai-status" id="aiStatus"></div>
     </div>
-
-    <div id="manualBar">
-      <div style="font-size:13px;color:#92400e;font-weight:700;">👨‍👩‍👧 家长请回放录音，判定对错：</div>
-      <div class="mbtns">
-        <button class="btn success" id="btnManualOk">✅ 读对了</button>
-        <button class="btn danger" id="btnManualBad">❌ 读错了</button>
-      </div>
-    </div>
-
-    <div class="actions" id="qActions">
-      <button class="btn primary" id="btnSubmitQ">提交本题</button>
-    </div>
+    
+    <div id="qResultBox"></div>
 
     <div class="actions" id="qNav" hidden>
       <button class="btn primary" id="btnNextQ">下一题 →</button>
@@ -130,26 +169,37 @@
       <button class="btn primary" id="btnNextStudent">下一位孩子</button>
     </div>
   </section>
+
+  <section class="card teacher">
+    <h2 class="card-title">记录与导出</h2>
+    <p>本机已记录 <b id="recCount">0</b> 名孩子的检测结果。</p>
+    <div class="actions">
+      <button class="btn primary" id="btnDownload">下载 对话检测结果.DOC</button>
+      <button class="btn danger" id="btnClear">清空记录</button>
+    </div>
+  </section>
 </div>
 
 <script>
+// 题库与答案（accept中包含不同口音或漏读的容错）
 const QUESTIONS = [
-  { text:'Hello! I’m Mike.', cn:'你好！我是迈克。' },
-  { text:'What’s your name?', cn:'你叫什么名字？' },
-  { text:'Nice to meet you.', cn:'见到你很高兴。' },
-  { text:'How are you?', cn:'你好吗？' },
-  { text:'What colour is it?', cn:'它是什么颜色？' },
-  { text:'What’s this?', cn:'这是什么？' },
-  { text:'How many plates?', cn:'有多少个盘子？' },
-  { text:'Where are you from?', cn:'你来自哪里？' },
-  { text:'Do you like oranges?', cn:'你喜欢橙子吗？' }
+  { text:'Hello! I’m Mike.', cn:'你好！我是迈克。', accept:['hello i am mike','hello im mike','hello mike'] },
+  { text:'What’s your name?', cn:'你叫什么名字？', accept:['what is your name','whats your name'] },
+  { text:'Nice to meet you.', cn:'见到你很高兴。', accept:['nice to meet you','nice to meet you too'] },
+  { text:'How are you?', cn:'你好吗？', accept:['how are you','how are you doing'] },
+  { text:'What colour is it?', cn:'它是什么颜色？', accept:['what color is it','what colour is it'] },
+  { text:'What’s this?', cn:'这是什么？', accept:['what is this','whats this'] },
+  { text:'How many plates?', cn:'有多少个盘子？', accept:['how many plates','how many plate'] },
+  { text:'Where are you from?', cn:'你来自哪里？', accept:['where are you from','where you from'] },
+  { text:'Do you like oranges?', cn:'你喜欢橙子吗？', accept:['do you like oranges','do you like orange'] }
 ];
+const STORE_KEY = 'eng_dialogue_ai_records_v3';
 
 let student = {};
 let qIndex = 0;
 let answers = [];
 let isRecording = false;
-let mediaRecorder, mediaChunks = [], mediaStream, playbackUrl;
+let mediaRecorder, mediaChunks = [], mediaStream, audioCtx;
 
 function $(id){ return document.getElementById(id); }
 function toast(msg){
@@ -157,8 +207,6 @@ function toast(msg){
   t.textContent = msg; t.className = 'show';
   setTimeout(() => t.className = '', 2500);
 }
-
-// 语音合成
 function speak(text){
   if(!('speechSynthesis' in window)) return toast('设备不支持发音');
   window.speechSynthesis.cancel();
@@ -167,12 +215,25 @@ function speak(text){
   window.speechSynthesis.speak(u);
 }
 
-$('btnStart').onclick = () => {
+$('btnStart').onclick = async () => {
   const cls = $('inClass').value.trim();
   const name = $('inName').value.trim();
   if(!cls || !name) return toast('请填写班级和姓名');
+  
+  $('btnStart').textContent = 'AI 加载中...'; $('btnStart').disabled = true;
+  
+  // 加载本地 AI 模型
+  const loaded = await window.loadAIModel((msg) => {
+    $('btnStart').textContent = msg;
+  });
+  
+  if(!loaded) {
+    $('btnStart').textContent = '开始检测'; $('btnStart').disabled = false;
+    return;
+  }
+  
   student = { cls, name };
-  answers = new Array(9).fill(null);
+  answers = new Array(9).fill(false);
   qIndex = 0;
   $('setupPanel').hidden = true;
   $('resultPanel').hidden = true;
@@ -187,14 +248,12 @@ function loadQuestion(){
   $('progressLabel').textContent = `${qIndex + 1} / 9`;
   $('qText').textContent = q.text;
   $('qCn').textContent = q.cn;
-  $('sceneBox').innerHTML = `<div style="font-size:40px;">🏫</div>`; // 简化图片
   
   $('recStatus').textContent = '点击“听标准发音”听一遍，再录音。';
-  $('playbackBar').style.display = 'none';
-  $('manualBar').style.display = 'none';
+  $('aiStatus').style.display = 'none';
+  $('qResultBox').style.display = 'none';
   $('btnRecord').textContent = '🎤 按下录音';
   $('btnRecord').classList.remove('recording');
-  $('qActions').hidden = false;
   $('qNav').hidden = true;
   isRecording = false;
   
@@ -203,7 +262,7 @@ function loadQuestion(){
 
 $('btnSpeak').onclick = () => speak(QUESTIONS[qIndex].text);
 
-// 录音功能
+// 录音、处理音频、送入AI
 $('btnRecord').onclick = async () => {
   if(isRecording){
     mediaRecorder.stop();
@@ -215,18 +274,18 @@ $('btnRecord').onclick = async () => {
     mediaChunks = [];
     mediaRecorder.ondataavailable = e => mediaChunks.push(e.data);
     
-    mediaRecorder.onstop = () => {
+    mediaRecorder.onstop = async () => {
       isRecording = false;
-      $('btnRecord').textContent = '🎤 重新录音';
-      $('btnRecord').classList.remove('recording');
-      $('recStatus').textContent = '录音完成！请回放并判定。';
-      const blob = new Blob(mediaChunks, { type: 'audio/webm' });
-      if(playbackUrl) URL.revokeObjectURL(playbackUrl);
-      playbackUrl = URL.createObjectURL(blob);
-      $('audioPlayback').src = playbackUrl;
-      $('playbackBar').style.display = 'block';
-      $('manualBar').style.display = 'block'; // 显示家长判定按钮
+      $('btnRecord').textContent = '处理中...';
+      $('btnRecord').disabled = true;
+      $('recStatus').textContent = 'AI 正在分析录音...';
+      $('aiStatus').style.display = 'block';
+      $('aiStatus').textContent = '🧠 Whisper AI 正在倾听...';
+      
       mediaStream.getTracks().forEach(t => t.stop());
+      
+      const blob = new Blob(mediaChunks, { type: 'audio/webm' });
+      await processAudio(blob);
     };
     
     mediaRecorder.start();
@@ -234,28 +293,107 @@ $('btnRecord').onclick = async () => {
     $('btnRecord').textContent = '⏹ 录音中… 点击停止';
     $('btnRecord').classList.add('recording');
     $('recStatus').textContent = '正在录音，让孩子大声跟读...';
-    $('playbackBar').style.display = 'none';
-    $('manualBar').style.display = 'none';
+    $('qResultBox').style.display = 'none';
   } catch(err) {
     toast('无法访问麦克风，请检查权限');
   }
 };
 
-let manualChoice = null;
-$('btnManualOk').onclick = () => { manualChoice = true; toast('已标记：读对了'); };
-$('btnManualBad').onclick = () => { manualChoice = false; toast('已标记：读错了'); };
+// 音频处理与识别
+async function processAudio(blob) {
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    // 使用 Web Audio API 解码音频
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    
+    // 获取单声道 Float32Array 数据
+    let audioFloat32 = audioBuffer.getChannelData(0);
+    
+    // 如果采样率不是 16000，进行简单的重采样（Whisper 要求 16k）
+    if (audioBuffer.sampleRate !== 16000) {
+      const ratio = audioBuffer.sampleRate / 16000;
+      const newLength = Math.round(audioFloat32.length / ratio);
+      const resampled = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        resampled[i] = audioFloat32[Math.round(i * ratio)];
+      }
+      audioFloat32 = resampled;
+    }
+    
+    // 调用本地 AI 识别
+    const heardText = await window.recognizeAudio(audioFloat32);
+    
+    if (!heardText || heardText.trim() === '') {
+      showError('没有听到声音，请重试。');
+      return;
+    }
+    
+    // 自动判定对错
+    checkAnswer(heardText);
+    
+  } catch (e) {
+    console.error(e);
+    showError('音频分析失败，请重试。');
+  }
+}
 
-$('btnSubmitQ').onclick = () => {
-  if(manualChoice === null) return toast('请家长先判定对错');
-  answers[qIndex] = manualChoice;
-  $('qActions').hidden = true;
-  $('manualBar').style.display = 'none';
+// 判定逻辑
+function checkAnswer(heard) {
+  const q = QUESTIONS[qIndex];
+  const cleanHeard = heard.toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+  
+  let isCorrect = false;
+  // 只要匹配 accept 数组中的任意一句，或者相似度足够高
+  for (let i = 0; i < q.accept.length; i++) {
+    const target = q.accept[i];
+    if (cleanHeard.includes(target) || target.includes(cleanHeard)) {
+      isCorrect = true;
+      break;
+    }
+  }
+  
+  // 如果包含关键词也给过
+  const keywords = q.accept[0].split(' ').filter(w => w.length > 2);
+  let hitCount = 0;
+  keywords.forEach(k => { if(cleanHeard.includes(k)) hitCount++; });
+  if (hitCount / keywords.length >= 0.6) isCorrect = true;
+  
+  answers[qIndex] = isCorrect;
+  
+  // 更新UI
+  const box = $('qResultBox');
+  box.style.display = 'block';
+  box.className = isCorrect ? 'ok' : 'bad';
+  
+  const icon = isCorrect ? '✅' : '❌';
+  const color = isCorrect ? '#15803d' : '#dc2626';
+  
+  box.innerHTML = `
+    <div style="font-size:15px;line-height:1.6;">
+      <b style="color:${color};font-size:18px;">${icon} ${isCorrect ? '识别正确！' : '识别不通过'}</b><br>
+      <span style="color:#475569;">AI 听到的是：<i style="color:#1d4ed8;">"${heard}"</i></span><br>
+      <span style="font-size:12px;color:#64748b;">标准句子：${q.text}</span>
+    </div>
+  `;
+  
+  $('aiStatus').style.display = 'none';
+  $('recStatus').textContent = '判定完成。';
+  $('btnRecord').textContent = '🎤 重新录音';
+  $('btnRecord').disabled = false;
+  
   $('qNav').hidden = false;
-  $('btnNextQ').textContent = (qIndex === 8) ? '完成作答' : '下一题 →';
-};
+  $('btnNextQ').textContent = (qIndex === 8) ? '完成作答，查看成绩' : '下一题 →';
+}
+
+function showError(msg) {
+  $('aiStatus').style.display = 'none';
+  $('recStatus').textContent = msg;
+  $('btnRecord').textContent = '🎤 重新录音';
+  $('btnRecord').disabled = false;
+}
 
 $('btnNextQ').onclick = () => {
-  manualChoice = null;
   if(qIndex < 8){
     qIndex++;
     loadQuestion();
@@ -293,20 +431,67 @@ function showResults(){
     </tr>`;
   });
   $('resDetail').innerHTML = `<table><tr><th>序号</th><th>标准句子</th><th>判定</th></tr>${rows}</table>`;
+  
+  saveRecord({
+    name: student.name, cls: student.cls, score: score, correct: correct,
+    time: new Date().toLocaleString('zh-CN', { hour12:false }),
+    details: QUESTIONS.map((q, i) => ({ text: q.text, ok: answers[i] }))
+  });
 }
 
 $('btnAgain').onclick = () => {
   $('resultPanel').hidden = true;
   $('quizPanel').hidden = false;
-  answers = new Array(9).fill(null);
+  answers = new Array(9).fill(false);
   qIndex = 0;
-  manualChoice = null;
   loadQuestion();
 };
 $('btnNextStudent').onclick = () => {
   $('resultPanel').hidden = true;
   $('setupPanel').hidden = false;
   $('inName').value = '';
+};
+
+// 记录与导出
+function loadRecords(){
+  try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }catch(e){ return []; }
+}
+function saveRecord(rec){
+  const list = loadRecords(); list.push(rec);
+  localStorage.setItem(STORE_KEY, JSON.stringify(list));
+  updateRecCount();
+}
+function updateRecCount(){ $('recCount').textContent = loadRecords().length; }
+updateRecCount();
+
+$('btnDownload').onclick = () => {
+  const list = loadRecords();
+  if(!list.length) return toast('没有记录可下载');
+  
+  let rows = list.map((r, i) => {
+    let wrong = r.details.filter(d => !d.ok).map(d => d.text).join('；') || '无';
+    return `<tr><td class="c">${i+1}</td><td class="c">${r.name}</td><td class="c">${r.cls}</td>
+            <td class="c">${r.score}</td><td class="c">${r.time}</td><td class="w">${wrong}</td></tr>`;
+  }).join('');
+  
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>成绩统计</title>
+  <style>@page{size:A4 landscape;margin:1.5cm;} body{font-family:"宋体";}
+  h1{text-align:center;font-size:16pt;} table{width:100%;border-collapse:collapse;margin-top:10px;}
+  th,td{border:1px solid #000;padding:6px;font-size:10pt;} th{background:#eee;}
+  .c{text-align:center;} .w{font-size:9pt;color:#c00;}</style></head><body>
+  <h1>三年级英语对话检测成绩统计</h1>
+  <table><tr><th>序号</th><th>姓名</th><th>班级</th><th>得分</th><th>检测时间</th><th>未通过句子</th></tr>
+  ${rows}</table></body></html>`;
+  
+  const blob = new Blob(['\ufeff' + html], {type:'application/msword;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = '对话检测成绩单.DOC'; a.click(); toast('已开始下载');
+};
+
+$('btnClear').onclick = () => {
+  if(confirm('确定要清空所有成绩记录吗？')) {
+    localStorage.removeItem(STORE_KEY); updateRecCount(); toast('已清空');
+  }
 };
 </script>
 </body>
