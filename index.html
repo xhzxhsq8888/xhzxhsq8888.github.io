@@ -3,21 +3,26 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>三年级英语 · AI 对话跟读检测</title>
-<!-- 引入 Transformers.js -->
+<title>三年级英语 · AI 自动检测</title>
+
+<!-- 引入 Transformers.js 引擎 -->
 <script type="module">
   import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
   
+  // 使用国内镜像加速模型下载
   env.allowLocalModels = false;
   env.remoteHost = 'https://hf-mirror.com'; 
 
   let transcriber = null;
 
+  // 加载模型
   window.loadAIModel = async function(updateStatus) {
     if (transcriber) return true;
-    updateStatus('正在加载 AI 模型 (首次约40MB)...');
+    updateStatus('正在下载 AI 模型 (约40MB，仅首次)...');
     try {
+      // whisper-tiny.en 是纯英文小模型，速度快
       transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en');
+      updateStatus('AI 模型加载成功！');
       return true;
     } catch (error) {
       console.error('模型加载失败', error);
@@ -26,9 +31,11 @@
     }
   };
 
+  // 识别音频 (已修复参数错误)
   window.recognizeAudio = async function(audioFloat32Array) {
     if (!transcriber) throw new Error('AI 模型未就绪');
-    const output = await transcriber(audioFloat32Array, { language: 'english', task: 'transcribe' });
+    // 纯英文模型调用时，绝对不能传 language 或 task 参数，否则会报错
+    const output = await transcriber(audioFloat32Array);
     return output.text || '';
   };
 </script>
@@ -85,6 +92,7 @@
   #qResultBox{margin-top:14px;padding:14px;border-radius:12px;display:none;}
   #qResultBox.ok{background:#dcfce7;border:1px solid #86efac;}
   #qResultBox.bad{background:#fee2e2;border:1px solid #fca5a5;}
+  #qResultBox.wait{background:#fef3c7;border:1px solid #fde68a;}
   .manual-override{display:none;margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;}
 </style>
 </head>
@@ -100,9 +108,9 @@
     <h2 class="card-title">开始检测</h2>
     <div class="field"><label>班级</label><input id="inClass" type="text" placeholder="例如：三年级(2)班"></div>
     <div class="field"><label>姓名</label><input id="inName" type="text" placeholder="请输入孩子的姓名"></div>
-    <button class="btn primary" id="btnStart">开始检测</button>
+    <button class="btn primary" id="btnStart">开始检测并加载 AI</button>
     <p class="hint" style="color:#b45309;background:#fffbeb;border-left-color:#f59e0b;">
-      <b>⚠️ 提示：</b> 首次使用需加载 AI 模型（约40MB），请耐心等待。如果 AI 无法识别，系统会自动弹出“家长判定”按钮。
+      <b>⚠️ 提示：</b> 首次点击需下载约 40MB 的 AI 模型，请耐心等待十几秒（后续打开秒进）。如果 AI 无法识别，系统会自动弹出“家长判定”按钮。
     </p>
   </section>
 
@@ -165,6 +173,7 @@
 </div>
 
 <script>
+// 题库配置
 const QUESTIONS = [
   { text:'Hello! I’m Mike.', cn:'你好！我是迈克。', accept:['hello i am mike','hello im mike','hello mike'] },
   { text:'What’s your name?', cn:'你叫什么名字？', accept:['what is your name','whats your name'] },
@@ -176,7 +185,7 @@ const QUESTIONS = [
   { text:'Where are you from?', cn:'你来自哪里？', accept:['where are you from','where you from'] },
   { text:'Do you like oranges?', cn:'你喜欢橙子吗？', accept:['do you like oranges','do you like orange'] }
 ];
-const STORE_KEY = 'eng_dialogue_ai_records_v4';
+const STORE_KEY = 'eng_dialogue_ai_records_v6';
 
 let student = {};
 let qIndex = 0;
@@ -198,6 +207,7 @@ function speak(text){
   window.speechSynthesis.speak(u);
 }
 
+// 开始按钮
 $('btnStart').onclick = async () => {
   const cls = $('inClass').value.trim();
   const name = $('inName').value.trim();
@@ -205,13 +215,14 @@ $('btnStart').onclick = async () => {
   
   $('btnStart').textContent = '准备中...'; $('btnStart').disabled = true;
   
+  // 加载 AI
   const loaded = await window.loadAIModel((msg) => {
     $('btnStart').textContent = msg;
   });
   
   if(!loaded) {
-    $('btnStart').textContent = '开始检测'; $('btnStart').disabled = false;
-    return toast('AI 加载失败');
+    $('btnStart').textContent = '开始检测并加载 AI'; $('btnStart').disabled = false;
+    return toast('AI 加载失败，请检查网络');
   }
   
   student = { cls, name };
@@ -245,6 +256,7 @@ function loadQuestion(){
 
 $('btnSpeak').onclick = () => speak(QUESTIONS[qIndex].text);
 
+// 录音与 AI 处理
 $('btnRecord').onclick = async () => {
   if(isRecording){
     mediaRecorder.stop();
@@ -281,18 +293,18 @@ $('btnRecord').onclick = async () => {
   }
 };
 
+// 音频转码并送入 AI
 async function processAudio(blob) {
-  // 增加超时兜底
   let timeoutHit = false;
   const timer = setTimeout(() => {
     timeoutHit = true;
-    showError('AI 响应超时（可能是手机不支持本地 AI），请使用下方家长判定。');
-  }, 10000);
+    showError('AI 响应超时，请使用下方家长判定。');
+  }, 15000); // 延长至15秒防卡顿
 
   try {
     const arrayBuffer = await blob.arrayBuffer();
     
-    // 兼容性更强的初始化
+    // 初始化 AudioContext
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
     
@@ -311,6 +323,7 @@ async function processAudio(blob) {
     
     if (timeoutHit) return;
     
+    // 调用识别
     const heardText = await window.recognizeAudio(audioFloat32);
     clearTimeout(timer);
     
@@ -321,6 +334,7 @@ async function processAudio(blob) {
       return;
     }
     
+    // 判定对错
     checkAnswer(heardText);
     
   } catch (e) {
@@ -337,7 +351,6 @@ function showError(msg) {
   $('btnRecord').textContent = '🎤 重新录音';
   $('btnRecord').disabled = false;
   
-  // 显示家长兜底判定
   const box = $('qResultBox');
   box.style.display = 'block';
   box.className = 'wait';
@@ -345,7 +358,7 @@ function showError(msg) {
     <div style="font-size:15px;line-height:1.6;">
       <b style="color:#b45309;">⚠️ AI 无法自动判定</b><br>
       <span style="color:#475569;">请家长人工听一下孩子刚才读的：</span>
-      <div class="manual-override" id="manualOverride" style="display:block;">
+      <div class="manual-override" style="display:block;">
         <button class="btn success" id="btnForceOk" style="padding:8px 15px;font-size:13px;margin-right:10px;">✅ 读对了</button>
         <button class="btn danger" id="btnForceBad" style="padding:8px 15px;font-size:13px;">❌ 读错了</button>
       </div>
@@ -356,11 +369,13 @@ function showError(msg) {
   $('btnForceBad').onclick = () => forceSubmit(false);
 }
 
+// 文本匹配逻辑
 function checkAnswer(heard) {
   const q = QUESTIONS[qIndex];
   const cleanHeard = heard.toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
   
   let isCorrect = false;
+  // 1. 看是否包含完整标准句子
   for (let i = 0; i < q.accept.length; i++) {
     const target = q.accept[i];
     if (cleanHeard.includes(target) || target.includes(cleanHeard)) {
@@ -368,6 +383,7 @@ function checkAnswer(heard) {
     }
   }
   
+  // 2. 关键词命中率 >= 60% 也通过
   const keywords = q.accept[0].split(' ').filter(w => w.length > 2);
   let hitCount = 0;
   keywords.forEach(k => { if(cleanHeard.includes(k)) hitCount++; });
@@ -391,7 +407,7 @@ function showResultUI(heard, isCorrect) {
   
   box.innerHTML = `
     <div style="font-size:15px;line-height:1.6;">
-      <b style="color:${color};font-size:18px;">${icon} ${isCorrect ? '判定：正确！' : '判定：不通过'}</b><br>
+      <b style="color:${color};font-size:18px;">${icon} 判定：${isCorrect ? '正确！' : '不通过'}</b><br>
       <span style="color:#475569;">识别结果：<i style="color:#1d4ed8;">"${heard}"</i></span><br>
       <span style="font-size:12px;color:#64748b;">标准句子：${QUESTIONS[qIndex].text}</span>
     </div>
@@ -465,7 +481,7 @@ $('btnNextStudent').onclick = () => {
   $('inName').value = '';
 };
 
-// 记录与导出
+// 数据存储与导出
 function loadRecords(){
   try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }catch(e){ return []; }
 }
